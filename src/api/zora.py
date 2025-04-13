@@ -1484,31 +1484,48 @@ class ZoraClient:
             logger.error(f"Error fetching tradable coins: {e}")
             return []
     
-    async def close_websocket(self):
-        """Close the WebSocket connection"""
-        if self.ws_connection:
-            try:
-                await self.ws_connection.close()
-                self.ws_connection = None
-                logger.info("WebSocket connection closed")
-            except Exception as e:
-                logger.error(f"Error closing WebSocket connection: {e}")
-
-    # Helper method for running async web3 calls
-    async def _run_async(self, func, *args, **kwargs):
+    async def get_eth_price(self) -> float:
         """
-        Run a Web3 function in a non-blocking way
+        Get the current ETH price in USD
         
-        Args:
-            func: The function to run
-            *args: Arguments to pass to the function
-            **kwargs: Keyword arguments to pass to the function
-            
         Returns:
-            The result of the function call
+            Current ETH price in USD
         """
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
+        try:
+            # Try to get the price from the Zora SDK API
+            endpoint = "/token/price"
+            params = {
+                "address": "0x4200000000000000000000000000000000000006",  # WETH address
+                "chain": "8453"  # Base Network
+            }
+            
+            response = await self._make_request(endpoint, params)
+            
+            if response and "price" in response:
+                price_data = response["price"]
+                if isinstance(price_data, dict) and "amount" in price_data:
+                    return float(price_data["amount"])
+                elif isinstance(price_data, (int, float, str)):
+                    return float(price_data)
+                    
+            # Fallback to a hardcoded source (could be replaced with another API)
+            logger.warning("⚠️ Could not get ETH price from Zora API, using fallback")
+            
+            # Try using an alternative API for ETH price
+            async with aiohttp.ClientSession() as session:
+                async with session.get("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd") as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if "ethereum" in data and "usd" in data["ethereum"]:
+                            return float(data["ethereum"]["usd"])
+            
+            # If all else fails, return a reasonable default price
+            logger.warning("⚠️ Using default ETH price as all APIs failed")
+            return 3000.0  # Default fallback price
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to fetch ETH price: {e}")
+            return 3000.0  # Default fallback price
 
     async def get_top_tokens(self, limit: int = 20, sort_by: str = "volume") -> List[Coin]:
         """
@@ -1712,3 +1729,29 @@ class ZoraClient:
             coins.append(coin)
             
         return coins
+
+    async def close_websocket(self):
+        """Close the WebSocket connection"""
+        if self.ws_connection:
+            try:
+                await self.ws_connection.close()
+                self.ws_connection = None
+                logger.info("WebSocket connection closed")
+            except Exception as e:
+                logger.error(f"Error closing WebSocket connection: {e}")
+
+    # Helper method for running async web3 calls
+    async def _run_async(self, func, *args, **kwargs):
+        """
+        Run a Web3 function in a non-blocking way
+        
+        Args:
+            func: The function to run
+            *args: Arguments to pass to the function
+            **kwargs: Keyword arguments to pass to the function
+            
+        Returns:
+            The result of the function call
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, lambda: func(*args, **kwargs))

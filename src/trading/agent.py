@@ -8,11 +8,13 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 from colorama import Fore, Style
 import random
+import os
 
 from ..api.zora import ZoraClient
 from ..models.portfolio import Portfolio, Holding
 from ..models.signal import Signal, SignalType
 from ..models.coin import Coin
+from .zora_trader import ZoraSDKTrader
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,8 @@ class TradingAgent:
         max_allocation_percent: float = 20.0,
         min_eth_reserve: float = 0.05,
         simulate: bool = True,
-        mock_capital: float = 1000.0  # Start with $1000 mock capital
+        mock_capital: float = 1000.0,  # Start with $1000 mock capital
+        private_key: Optional[str] = None  # For real trading
     ):
         self.wallet_address = wallet_address
         self.zora_client = zora_client
@@ -50,6 +53,20 @@ class TradingAgent:
         self.last_portfolio_update: Optional[datetime] = None
         self.last_price_update: Optional[datetime] = None
         
+        # Initialize the trader for executing actual trades when enabled
+        self.private_key = private_key or os.environ.get("WALLET_PRIVATE_KEY")
+        if not simulate and not self.private_key:
+            logger.warning("⚠️ Trading agent initialized without private key. Only simulated trades will be executed.")
+            self.simulate = True
+            
+        # Create the ZoraSDKTrader instance
+        self.trader = ZoraSDKTrader(
+            zora_client=self.zora_client,
+            wallet_address=self.wallet_address,
+            private_key=self.private_key,
+            slippage_tolerance=0.01  # 1% slippage by default
+        )
+
     async def update_portfolio(self) -> None:
         """
         Update user's portfolio data from the blockchain
@@ -331,85 +348,212 @@ class TradingAgent:
             Dict with trade results
         """
         coin = trade_decision.get("coin")
+        if not coin:
+            logger.error("❌ Cannot execute trade: No coin specified")
+            return {"success": False, "error": "No coin specified"}
+            
+        trade_type = trade_decision.get("type")
+        if not trade_type:
+            logger.error("❌ Cannot execute trade: No trade type specified")
+            return {"success": False, "error": "No trade type specified"}
+            
         amount = trade_decision.get("amount", 0)
-        price = trade_decision.get("price", 0)
-        trade_type = trade_decision.get("type", "UNKNOWN")
+        max_usd_amount = trade_decision.get("max_usd_amount", self.max_trade_amount_usd)
         
-        if not coin or amount <= 0 or price <= 0:
-            return {
-                "success": False,
-                "coin": coin,
-                "error": "Invalid trade parameters",
-                "type": trade_type
-            }
+        # Get the coin's current price
+        price = getattr(coin, "current_price", 0)
+        if not price or price <= 0:
+            logger.warning(f"⚠️ Cannot determine price for {coin.symbol}, using estimated price")
+            price = trade_decision.get("estimated_price", 1.0)
             
-        # Calculate the trade value
-        trade_value = amount * price
+        # Generate a mocked price for simulation if needed
+        if self.simulate and not price:
+            price = random.uniform(0.1, 100.0)
+            logger.info(f"Using simulated price ${price:.4f} for {coin.symbol}")
+            
+        # Store the portfolio state before the trade
+        before_table = str(self.portfolio.get_table())
+        before_total = self.portfolio.get_total_value()
         
-        # Check if we have enough mock capital for the buy
-        if trade_type == "BUY" and trade_value > self.mock_cash_balance:
-            logger.warning(f"❌ TRADE FAILED: Not enough funds to buy {amount} {coin.symbol}. Available: ${self.mock_cash_balance:.2f}, Required: ${trade_value:.2f}")
-            return {
-                "success": False,
-                "coin": coin,
-                "error": f"Insufficient funds. Available: ${self.mock_cash_balance:.2f}, Required: ${trade_value:.2f}",
-                "type": trade_type
-            }
-        
-        # Auto-trading is enabled - let's execute trades
         try:
-            # Get before portfolio snapshot
-            before_table = str(self.portfolio.get_table())
-            before_total = self.portfolio.get_total_value()
+            # Generate the signal from the decision
+            signal_type = SignalType.BUY if trade_type.upper() == "BUY" else SignalType.SELL
             
-            if trade_type == "BUY":
-                # Subtract from mock cash balance
-                self.mock_cash_balance -= trade_value
+            # Determine the trade amount in USD
+            trade_value = min(max_usd_amount, amount * price if amount else max_usd_amount)
+            
+            # If we're simulating, perform a mock trade
+            if self.simulate:
+                # Simulate the trade in our portfolio
+                if trade_type.upper() == "BUY":
+                    # Calculate how many coins we can buy with the trade value
+                    if price <= 0:
+                        logger.error(f"❌ Cannot execute trade: Invalid price ${price}")
+                        return {"success": False, "error": "Invalid price"}
+                        
+                    # Check if we have enough mock cash
+                    if trade_value > self.mock_cash_balance:
+                        trade_value = self.mock_cash_balance
+                        logger.warning(f"⚠️ Reduced trade amount to ${trade_value:.2f} due to insufficient funds")
+                        
+                    if trade_value <= 0:
+                        logger.error("❌ Trade failed: Insufficient funds")
+                        return {"success": False, "error": "Insufficient funds"}
+                        
+                    amount = trade_value / price
+                    
+                    # Update our mock cash balance
+                    self.mock_cash_balance -= trade_value
+                    
+                    # Add to portfolio
+                    self.portfolio.add_holding(
+                        coin=coin,
+                        amount=amount,
+                        avg_purchase_price=price
+                    )
+                    
+                    # Record the trade
+                    self.trading_history.append({
+                        "timestamp": datetime.now(),
+                        "type": "BUY",
+                        "coin": coin.symbol,
+                        "amount": amount,
+                        "price": price,
+                        "value": trade_value,
+                        "simulated": True
+                    })
+                    
+                    logger.info(f"✅ TRADE: BOUGHT {amount:.4f} {coin.symbol} @ ${price:.4f} | Total: ${trade_value:.2f}")
+                    
+                elif trade_type.upper() == "SELL":
+                    # Check if we have the coin in our portfolio
+                    holding = self.portfolio.get_holding(coin.id)
+                    if not holding:
+                        logger.error(f"❌ Cannot sell {coin.symbol}: Not in portfolio")
+                        return {"success": False, "error": f"Cannot sell {coin.symbol}: Not in portfolio"}
+                        
+                    # Determine how much to sell
+                    if amount <= 0 or amount > holding.amount:
+                        amount = holding.amount
+                        
+                    trade_value = amount * price
+                    
+                    # Update our mock cash balance
+                    self.mock_cash_balance += trade_value
+                    
+                    # Remove from portfolio
+                    self.portfolio.remove_holding(
+                        coin=coin,
+                        amount=amount,
+                        sale_price=price
+                    )
+                    
+                    # Record the trade
+                    self.trading_history.append({
+                        "timestamp": datetime.now(),
+                        "type": "SELL",
+                        "coin": coin.symbol,
+                        "amount": amount,
+                        "price": price,
+                        "value": trade_value,
+                        "simulated": True
+                    })
+                    
+                    logger.info(f"💰 TRADE: SOLD {amount:.4f} {coin.symbol} @ ${price:.4f} | Total: ${trade_value:.2f}")
                 
-                # Add to portfolio
-                self.portfolio.add_holding(
-                    coin=coin,
-                    amount=amount,
-                    avg_purchase_price=price
-                )
-                logger.info(f"✅ TRADE: BOUGHT {amount:.4f} {coin.symbol} @ ${price:.4f} | Total: ${trade_value:.2f}")
+                # Get after portfolio snapshot
+                after_table = str(self.portfolio.get_table())
+                after_total = self.portfolio.get_total_value()
+                
+                # If the portfolio value changed, show the updated table
+                value_change = after_total - before_total
+                if value_change != 0:
+                    change_pct = (value_change / before_total) * 100 if before_total > 0 else 0
+                    direction = "+" if value_change > 0 else ""
+                    
+                    # Display updated portfolio after trade
+                    logger.info("")  # Empty line for spacing
+                    logger.info(f"Portfolio value change: {direction}${value_change:.2f} ({direction}{change_pct:.2f}%)")
+                    
+                    # Show updated trading account status
+                    logger.info(self.display_agent_status())
+                
+                return {
+                    "success": True,
+                    "coin": coin,
+                    "amount": amount,
+                    "price": price,
+                    "value": trade_value,
+                    "type": trade_type
+                }
             else:
-                # Add to mock cash balance
-                self.mock_cash_balance += trade_value
+                # Execute a real trade using the ZoraSDKTrader
+                logger.info(f"🔄 Executing real trade for {coin.symbol}")
                 
-                # Remove from portfolio
-                self.portfolio.remove_holding(
+                # Create a signal from the trade decision
+                signal = Signal(
+                    type=signal_type,
+                    strength=trade_decision.get("confidence", 0.75),
+                    reason=trade_decision.get("reason", "Trading signal"),
                     coin=coin,
-                    amount=amount,
-                    sale_price=price
+                    strategy=trade_decision.get("strategy", "TradingAgent")
                 )
-                logger.info(f"💰 TRADE: SOLD {amount:.4f} {coin.symbol} @ ${price:.4f} | Total: ${trade_value:.2f}")
-            
-            # Get after portfolio snapshot
-            after_table = str(self.portfolio.get_table())
-            after_total = self.portfolio.get_total_value()
-            
-            # If the portfolio value changed, show the updated table
-            value_change = after_total - before_total
-            if value_change != 0:
-                change_pct = (value_change / before_total) * 100 if before_total > 0 else 0
-                direction = "+" if value_change > 0 else ""
                 
-                # Display updated portfolio after trade
-                logger.info("")  # Empty line for spacing
-                logger.info(f"Portfolio value change: {direction}${value_change:.2f} ({direction}{change_pct:.2f}%)")
+                # Process the signal with the trader
+                result = await self.trader.process_trade_signal(signal, trade_value)
                 
-                # Show updated trading account status
-                logger.info(self.display_agent_status())
-            
-            return {
-                "success": True,
-                "coin": coin,
-                "amount": amount,
-                "price": price,
-                "value": trade_value,
-                "type": trade_type
-            }
+                if result.get("success"):
+                    # Update our portfolio based on the successful trade
+                    if trade_type.upper() == "BUY":
+                        # Add to portfolio
+                        self.portfolio.add_holding(
+                            coin=coin,
+                            amount=result.get("token_amount", amount),
+                            avg_purchase_price=price
+                        )
+                        
+                        logger.info(f"✅ TRADE: BOUGHT {result.get('token_amount', amount):.4f} {coin.symbol} @ ${price:.4f} | Total: ${trade_value:.2f}")
+                        
+                    elif trade_type.upper() == "SELL":
+                        # Remove from portfolio
+                        self.portfolio.remove_holding(
+                            coin=coin,
+                            amount=result.get("token_amount", amount),
+                            sale_price=price
+                        )
+                        
+                        logger.info(f"💰 TRADE: SOLD {result.get('token_amount', amount):.4f} {coin.symbol} @ ${price:.4f} | Total: ${trade_value:.2f}")
+                    
+                    # Record the trade
+                    self.trading_history.append({
+                        "timestamp": datetime.now(),
+                        "type": trade_type.upper(),
+                        "coin": coin.symbol,
+                        "amount": result.get("token_amount", amount),
+                        "price": price,
+                        "value": trade_value,
+                        "transaction_hash": result.get("transaction_hash"),
+                        "simulated": False
+                    })
+                    
+                    # Return the result
+                    return {
+                        "success": True,
+                        "coin": coin,
+                        "amount": result.get("token_amount", amount),
+                        "price": price,
+                        "value": trade_value,
+                        "type": trade_type,
+                        "transaction_hash": result.get("transaction_hash")
+                    }
+                else:
+                    logger.error(f"❌ Trade failed: {result.get('error', 'Unknown error')}")
+                    return {
+                        "success": False,
+                        "error": result.get("error", "Trade execution failed"),
+                        "coin": coin,
+                        "type": trade_type
+                    }
             
         except Exception as e:
             logger.error(f"Failed to execute trade: {e}")
