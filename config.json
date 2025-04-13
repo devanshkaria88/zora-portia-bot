@@ -1,0 +1,28 @@
+{
+  "zora": {
+    "rpc_url": "https://rpc.zora.energy/"
+  },
+  "portia": {
+    "api_url": "https://api.portia.ai/v1"
+  },
+  "max_coins": 50,
+  "coins_list_limit": 100,
+  "scan_interval": 120,
+  "fetch_metadata": true,
+  "fetch_trades": true,
+  "trades_limit": 20,
+  "max_signals_per_run": 5,
+  "min_signal_strength": 0.7,
+  "strategies": {
+    "momentum": {
+      "enabled": true,
+      "rsi_period": 14,
+      "rsi_overbought": 70,
+      "rsi_oversold": 30,
+      "macd_fast": 12,
+      "macd_slow": 26,
+      "macd_signal": 9,
+      "volume_threshold": 2.5
+    }
+  }
+}
