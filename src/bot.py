@@ -37,7 +37,10 @@ class ZoraBot:
         wallet_address: Optional[str] = None,
         auto_trading: bool = False,
         max_trade_amount: float = 100.0,
-        confidence_threshold: float = 0.75
+        confidence_threshold: float = 0.75,
+        private_key: Optional[str] = None,
+        simulated: bool = True,
+        strategy_name: str = "simple"
     ):
         # Initialize API clients
         self.zora_client = ZoraClient()
@@ -87,7 +90,9 @@ class ZoraBot:
                 zora_client=self.zora_client,
                 auto_trading_enabled=auto_trading,
                 confidence_threshold=confidence_threshold,
-                max_trade_amount_usd=max_trade_amount
+                max_trade_amount_usd=max_trade_amount,
+                simulate=simulated,
+                private_key=private_key
             )
         
         # Data stores
@@ -101,6 +106,17 @@ class ZoraBot:
         self.last_signals = []
         self.market_data = {}
         self.block_subscription_id = None
+        
+        # If private key is not provided directly, try to get it from environment
+        if not private_key and not simulated:
+            self.private_key = os.environ.get("WALLET_PRIVATE_KEY")
+            if not self.private_key:
+                logger.warning("⚠️ Private key not found but real trading enabled. Falling back to simulation mode.")
+                self.simulated = True
+                
+        logger.info(f"Initialized Zora Trading Bot for wallet {wallet_address}")
+        logger.info(f"Auto-trading: {'Enabled' if auto_trading else 'Disabled'}")
+        logger.info(f"Trade mode: {'Simulated' if simulated else 'REAL'}")
     
     def _get_tracked_coins(self) -> Set[str]:
         """Get the set of tracked coin addresses"""

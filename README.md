@@ -1,10 +1,13 @@
 # Zora Trading Bot with Portia AI Integration
 
-A trading bot designed to scan Zora Network's cryptocurrency market in real-time, identify high-performing coins, and provide buy/sell recommendations based on technical analysis and Portia AI's insights.
+A trading bot designed to scan Zora Network's cryptocurrency market in real-time, identify high-performing coins, and provide buy/sell recommendations based on technical analysis and Portia AI's insights. Now with **real trading capabilities** using the Zora SDK!
 
 ## Features
 
 - Direct integration with Zora Network via RPC API
+- **NEW: Real trading capabilities via Zora SDK integration**
+- **NEW: Support for both simulated and real trading modes**
+- **NEW: Colorful CLI logging for improved monitoring**
 - Optional integration with Zora GraphQL API when available
 - Portia AI integration for enhanced analysis and trading recommendations
 - Technical analysis using momentum, volume, and creator sentiment metrics
@@ -54,11 +57,19 @@ The bot uses Zora Network's RPC API for direct blockchain interaction:
      
      # Optional GraphQL endpoint
      ZORA_GRAPHQL_URL=https://api.zora.co/graphql
+     
+     # Trading Configuration (for real trading)
+     WALLET_PRIVATE_KEY=your_wallet_private_key_here
      ```
 
 3. Run the bot:
    ```
    python run_bot.py
+   ```
+
+4. Demo the trading features:
+   ```
+   python real_trade_demo.py
    ```
 
 ## Configuration
@@ -67,35 +78,56 @@ Customize the bot's behavior by editing the `config.json` file:
 
 ```json
 {
-  "zora": {
-    "rpc_url": "https://rpc.zora.energy/",
-    "graphql_url": "https://api.zora.co/graphql"
+  "wallet_address": "0x53dae6e4b5009c1d5b64bee9cb42118914db7e66",
+  "rpc_url": "https://rpc.zora.energy/",
+  "chain_id": 8453,
+  "api_key": "",
+  "trading": {
+    "auto_trade": true,
+    "simulated": true,
+    "strategy": "simple",
+    "mock_capital": 5000.0,
+    "max_trade_amount": 100.0,
+    "confidence_threshold": 0.65,
+    "slippage_tolerance": 0.01,
+    "gas_limit_multiplier": 1.2
   },
-  "portia": {
-    "api_url": "https://api.portia.ai/v1"
+  "security": {
+    "private_key_env_var": "WALLET_PRIVATE_KEY",
+    "enable_real_trades": false
   },
-  "max_coins": 50,
-  "coins_list_limit": 100,
-  "scan_interval": 120,
-  "fetch_metadata": true,
-  "fetch_trades": true,
-  "trades_limit": 20,
-  "max_signals_per_run": 5,
-  "min_signal_strength": 0.7,
-  "strategies": {
-    "momentum": {
-      "enabled": true,
-      "rsi_period": 14,
-      "rsi_overbought": 70,
-      "rsi_oversold": 30,
-      "macd_fast": 12,
-      "macd_slow": 26,
-      "macd_signal": 9,
-      "volume_threshold": 2.5
-    }
+  "logging": {
+    "level": "INFO",
+    "log_file": "zora_bot.log",
+    "colored_output": true
   }
 }
 ```
+
+## Trading Capabilities
+
+The bot now includes comprehensive trading functionality:
+
+1. **Zora SDK Integration**:
+   - Execute real token swaps on the Zora Network
+   - Support for token-to-token, ETH-to-token, and token-to-ETH swaps
+   - Automatic token approval handling
+   - Slippage protection and gas estimation
+
+2. **Trading Modes**:
+   - **Simulation Mode**: Test strategies with mock capital without executing real trades
+   - **Real Trading**: Execute actual blockchain transactions (requires private key)
+
+3. **Trading Agent Features**:
+   - Process trading signals from multiple strategies
+   - Configurable confidence thresholds
+   - Flexible trade amount calculation
+   - Comprehensive trade logging and history tracking
+
+4. **Colorful CLI Interface**:
+   - Color-coded log levels for better readability
+   - Emoji icons for different operations (trades, WebSocket events, blockchain interactions)
+   - Formatted tables for portfolio display
 
 ## Trading Strategies
 
@@ -121,16 +153,26 @@ The bot leverages Portia AI for enhanced trading decisions:
 zora-portia-bot/
 ├── src/
 │   ├── api/            # API clients
+│   │   └── zora.py     # Zora Network API client
 │   ├── models/         # Data models
+│   │   ├── coin.py     # Token data model
+│   │   ├── portfolio.py # Portfolio management
+│   │   └── signal.py   # Trading signals
 │   ├── strategies/     # Trading strategies
+│   │   └── simple.py   # Simple trading strategy
+│   ├── trading/        # Trading functionality
+│   │   ├── agent.py    # Trading agent
+│   │   └── zora_trader.py # Zora SDK trader implementation
 │   ├── utils/          # Utility functions
 │   ├── bot.py          # Main bot class
 │   └── config.py       # Configuration handling
 ├── tests/              # Test directory
 ├── .env                # Environment variables
 ├── config.json         # Bot configuration
+├── config.example.json # Example configuration
 ├── requirements.txt    # Dependencies
 ├── run_bot.py          # Entry point
+├── real_trade_demo.py  # Demo of real trading capabilities
 └── README.md           # Documentation
 ```
 
@@ -161,10 +203,11 @@ python -m unittest discover tests
 
 ## Future Enhancements
 
-1. **Trading Integration**:
-   - Connect to DEXs on Zora Network for actual trading
-   - Implement wallet integration for transaction signing
-   - Add position management and portfolio tracking
+1. **Enhanced Trading Features**:
+   - Advanced portfolio rebalancing
+   - Dollar-cost averaging and scheduled buys
+   - Stop-loss and take-profit orders
+   - Gas optimization strategies
 
 2. **Enhanced Analysis**:
    - Implement on-chain social sentiment analysis
